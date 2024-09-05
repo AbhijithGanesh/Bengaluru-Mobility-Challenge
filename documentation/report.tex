@@ -1,0 +1,279 @@
+\documentclass[11pt]{IEEEtran}
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{geometry}
+\usepackage{url}
+\usepackage{booktabs}
+\usepackage{multicol}
+\usepackage{hyperref}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{fancyhdr}
+
+% Title and author format similar to NIPS-2012
+\title{\textbf{\Large Vehicle Re-Identification for Origin-Destination Flow
+        Estimation:} \\
+    \large Bengaluru Mobility Challenge - Phase II}
+
+\author{
+    Abhijith Ganesh
+    Prenitha Rajesh
+    Pardheev Krishna
+}
+
+\date{September 2024}
+
+\begin{document}
+
+\maketitle
+\begin{abstract}
+    This report presents our approach for vehicle re-identification in the
+    context of the Bengaluru Mobility Challenge (BMC) - Phase II. The objective
+    is
+    to re-identify vehicles seen at one location in another part of the network
+    and
+    estimate origin-destination (O-D) flows over a specific time period. Our
+    solution integrates YOLOv10 object detection, Instance-Batch Normalization
+    (IBN-Net) for feature extraction, and Chroma for efficient vector storage.
+    Using a custom dataset of Indian vehicles, our system achieved competitive
+    performance in re-identification across multiple camera feeds. This
+    document
+    details our methodology, results, and conclusions.
+\end{abstract}
+
+\section{Introduction}
+The task of vehicle re-identification is essential for estimating
+origin-destination (O-D) flows, which are crucial for transportation planning
+and traffic management. The Bengaluru Mobility Challenge (BMC) Phase II
+evaluates the ability to re-identify vehicles across different locations within
+a network over a specific time period. Accurate O-D flow estimation is a key
+factor for effective traffic control and infrastructure development.
+
+In this challenge, participants are tasked with re-identifying vehicles
+detected by multiple camera feeds, which helps understand traffic patterns,
+congestion, and vehicle movement between key points. Our approach leverages
+state-of-the-art detection and feature extraction techniques to enhance the
+accuracy of re-identification and prediction of O-D flows, improving the
+overall traffic management system in a dynamic city like Bengaluru.
+
+Through a detailed analysis of the given video footage, we're able to identify
+the following key points:
+\begin{itemize}
+    \item The dataset is substantial, requiring efficient modeling to be
+          incorporated into deep learning networks.
+    \item The data is unstructured and necessitates thorough cleaning and
+          pre-processing.
+    \item Due to the volume of data, it is impractical to load it entirely into
+          memory.
+    \item The data is highly dynamic, demanding real-time updates and
+          processing.
+\end{itemize}
+
+\section{Methodology}
+Our solution comprises three primary stages: detection, feature extraction, and
+matching.
+
+\subsection{Detection}
+We employ the YOLOv10 object detection framework \cite{wang2024yolov10} to
+identify vehicles in video streams. YOLOv10 is known for its real-time
+detection capability and balance between speed and accuracy.
+
+\subsection{Feature Extraction}
+For feature extraction, we use the Instance-Batch Normalization Network
+(IBN-Net) \cite{pan2018IBN-Net}, which combines instance and batch
+normalization to improve the model's generalization capabilities. This enables
+robust vehicle identification under varying conditions, such as different
+lighting or weather.
+
+\subsection{Vector Storage with Chroma}
+Chroma, a vector database optimized for high-dimensional embeddings, is used to
+store the vehicle feature vectors. This ensures efficient similarity searches
+between frames captured by different cameras.
+
+\subsection{Matching}
+We compute cosine similarity between embeddings to match vehicles across
+multiple frames and locations. A threshold is applied to determine whether the
+vehicles in different frames are likely to be the same.
+
+\section{Training Metrics}
+We evaluated our solution on a dataset of 24,500 images of Indian vehicles,
+divided into 19,600 training images and 4,900 testing images. The performance
+of the models is summarized in Appendix (see Table
+\ref{table:performance_results}).
+
+\section{Software and Libraries}
+Our project uses the following libraries:
+\begin{itemize}
+    \item \texttt{json} - for handling data formats.
+    \item \texttt{logging} - for logging program events.
+    \item \texttt{os} - to interact with the operating system.
+    \item \texttt{subprocess} - for running external commands.
+    \item \texttt{sys} - to manipulate runtime environment.
+    \item \texttt{time} - for time-related functions.
+    \item \texttt{chromadb} - for storing feature vectors.
+    \item \texttt{cv2} - for image processing.
+    \item \texttt{h5py} - for handling large datasets.
+    \item \texttt{numpy} - for numerical operations.
+    \item \texttt{torch} - for deep learning and neural networks.
+    \item \texttt{comet\_ml} - for tracking model metrics.
+    \item \texttt{PIL} - for image manipulation.
+    \item \texttt{torchvision} - for computer vision tasks.
+    \item \texttt{ultralytics} - for YOLO object detection.
+    \item \textbf{PrenAbhi} - Custom library for the competition guidelines,
+          data handling, and submission.
+\end{itemize}
+
+\section{Conclusions}
+Our vehicle re-identification system demonstrated strong performance across
+various model configurations. The combination of YOLOv10 for detection, IBN-Net
+for feature extraction, and Chroma for vector storage allowed for accurate O-D
+flow estimation. Future work includes improving detection in challenging
+environments and optimizing the matching process for larger datasets. The
+authors of this paper believe that this model is very foundational and needs
+large-scale Indian/Localized data to improve and detect fine details in the
+images. At the present stage, the model is able to detect all the commercial
+classes of vehicles decently enough but needs more data in terms of
+three-wheelers, bicycles and other non-commercial vehicles.
+\bibliographystyle{ieeetr}
+\begin{thebibliography}{9}
+    \bibitem{aicity} AI City Challenge, \url{https://www.aicitychallenge.org/}
+    \bibitem{zheng2021} Z. Zheng et al., ``Connecting Language and Vision for
+    Natural Language-Based Vehicle Retrieval,'' \emph{arXiv preprint}, 2021.
+    Available at: \url{https://arxiv.org/pdf/2105.14897}
+    \bibitem{wang2024yolov10} A. Wang et al., ``YOLOv10: Real-Time End-to-End
+    Object Detection,'' \emph{arXiv preprint}, 2024.
+    \bibitem{pan2018IBN-Net} X. Pan, P. Luo, J. Shi, and X. Tang, ``Two at
+    Once: Enhancing Learning and Generalization Capacities via IBN-Net,'' in
+    Proceedings of the European Conference on Computer Vision (ECCV), 2018.
+    \bibitem{wojke2017simple} N. Wojke, A. Bewley, and D. Paulus, ``Simple
+    Online and Realtime Tracking with a Deep Association Metric,'' \emph{2017
+        IEEE
+        International Conference on Image Processing (ICIP)}, pp. 3645-3649,
+    2017.
+    \bibitem{naphade2020ai} M. Naphade et al., ``The 5th AI City Challenge,''
+    \emph{2020 IEEE/CVF Conference on Computer Vision and Pattern Recognition
+        Workshops (CVPRW)}, 2020.
+    \bibitem{he2016resnet} K. He, X. Zhang, S. Ren, and J. Sun, ``Deep Residual
+    Learning for Image Recognition,'' in Proceedings of the IEEE Conference on
+    Computer Vision and Pattern Recognition (CVPR), 2016, pp. 770-778.
+\end{thebibliography}
+
+\appendix
+\section{Appendix}
+Here we provide detailed performance metrics for the models and configurations
+tested.
+
+\begin{table*}[t]
+    \centering
+    \caption{Comprehensive Results: Epochs, Loss, Model Parameters, Speed,
+        GFLOPs, and mAP Across All Models}
+    \label{table:comprehensive_results}
+    \resizebox{\textwidth}{!}{
+        \begin{tabular}{lcccccccc}
+            \toprule
+            Name              & Epochs     & Val/Cls\_Loss &
+            Model/Parameters  & Batch Size & Speed (ms)    & Train/Box\_Loss &
+            Model/GFLOPs      & mAP50(B)
+            \\
+            \midrule
+            prenag-xl         & 100        & 0.748         & 31,668,362
+                              & 16         & 3.907         & 1.132           &
+            171.062           &
+            0.944
+            \\
+            abhipren-aug      & 30         & 0.481         & 8,071,770
+                              & 16         & 1.876         & 0.878           &
+            24.796            &
+            0.981
+            \\
+            abhipren-noaug    & 30         & 0.394         & 8,071,770
+                              & 16         & 1.748         & 0.613           &
+            24.796            &
+            0.984
+            \\
+            prentrains-nonhyp & 25         & 0.394         & 8,071,770
+                              & 28         & 1.019         & 0.611           &
+            24.796            &
+            0.985
+            \\
+            prentrains-hyp    & 28         & 0.425         & 8,071,770
+                              & -1         & 0.966         & 0.681           &
+            24.796            &
+            0.980
+            \\
+            \bottomrule
+        \end{tabular}
+    }
+\end{table*}
+
+\begin{table}[h!]
+    \centering
+    \caption{Model Performance Results}
+    \label{table:performance_results}
+    \begin{tabular}{lcccc}
+        \toprule
+        Model              & mAP50(B) & Speed (ms) & GFLOPs  & Val/Cls\_Loss \\
+        \midrule
+        prenag-xl          & 0.944    & 3.907      & 171.062 & 0.748         \\
+        abhipren-aug       & 0.981    & 1.876      & 24.796  & 0.481         \\
+        abhipren-noaug     & 0.984    & 1.748      & 24.796  & 0.394         \\
+        prentrains-nonhyp  & 0.985    & 1.019      & 24.796  & 0.394         \\
+        prentrains-hyp\footnote{Batch size set to -1 was auto-optimized by the
+        Ultralytics code.} & 0.980    & 0.966      & 24.796  & 0.425         \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+\subsection{Image Metrics}
+Below are the images representing various metrics for our model training and
+evaluation.
+
+\begin{figure}[ht!]
+    \centering
+    \includegraphics[width=0.45\textwidth]{loss VS step.jpeg}
+    \caption{Loss vs Step}
+\end{figure}
+
+\begin{figure}[ht!]
+    \centering
+    \includegraphics[width=0.45\textwidth]{metrics_mAP50-95(B) VS step.jpeg}
+    \caption{mAP50-95(B) vs Step}
+\end{figure}
+
+\begin{figure}[ht!]
+    \centering
+    \includegraphics[width=0.45\textwidth]{metrics_mAP50(B) VS step.jpeg}
+    \caption{mAP50(B) vs Step}
+\end{figure}
+
+\begin{figure}[ht!]
+    \centering
+    \includegraphics[width=0.45\textwidth]{metrics_precision(B) VS step.jpeg}
+    \caption{Precision(B) vs Step}
+\end{figure}
+
+\begin{figure}[ht!]
+    \centering
+    \includegraphics[width=0.45\textwidth]{metrics_recall(B) VS step.jpeg}
+    \caption{Recall(B) vs Step}
+\end{figure}
+
+\begin{figure}[ht!]
+    \centering
+    \includegraphics[width=0.45\textwidth]{val_box_loss VS step.jpeg}
+    \caption{Validation Box Loss vs Step}
+\end{figure}
+
+\begin{figure}[ht!]
+    \centering
+    \includegraphics[width=0.45\textwidth]{val_cls_loss VS step.jpeg}
+    \caption{Validation Classification Loss vs Step}
+\end{figure}
+
+\begin{figure}[ht!]
+    \centering
+    \includegraphics[width=0.45\textwidth]{model_GFLOPs.jpeg}
+    \caption{Model GFLOPs}
+\end{figure}
+
+\end{document}

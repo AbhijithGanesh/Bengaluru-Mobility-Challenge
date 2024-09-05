@@ -1,0 +1,1 @@
+nohup python train_large.py > output.log 2>&1 &
