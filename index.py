@@ -1,9 +1,10 @@
+from comet_ml import Experiment
 import json
 import logging
 import os
 import subprocess
-import sys
 import time
+from pathlib import Path
 from typing import List, TypedDict
 
 import chromadb
@@ -13,12 +14,12 @@ import h5py
 import numpy as np
 import torch
 from chromadb.api.models.Collection import Collection
-from comet_ml import Experiment
-from PrenAbhi import Counter
-from PrenAbhi import global_logger as logger
 from PIL import Image
-from torchvision import transforms
+from torchvision import models, transforms
 from ultralytics import YOLO
+
+from module import Counter
+from module import global_logger as logger
 
 
 class VehicleMatch(TypedDict):
@@ -79,14 +80,12 @@ class Solution:
         self.data = {}
 
         self.experiment = Experiment(
-            api_key="zQYci303khoykJAwYAgQkG2Dj",
-            project_name="submission-testing",
+            api_key=os.environ.get("API_KEY"),
+            project_name="submission",
             workspace="abhijithganesh",
             display_summary_level=0,
-            disabled=True,
+            disabled=False,
         )
-        sys.stdout = open(os.devnull, "w")
-        sys.stderr = open(os.devnull, "w")
 
         self.test_chroma_client()
         self.init_chroma_client()
@@ -207,6 +206,7 @@ class Solution:
             camera_name (str): The name of the camera corresponding to the video.
         """
         results = []
+        camera_name = camera_name.name.removesuffix(camera_name.suffix)
         for key, val in video1.items():
             data = val.get("features")
             # Find cosine similarity from Chroma
@@ -226,7 +226,7 @@ class Solution:
                             "camera_name": res["metadatas"][0][i]["camera"],
                         }
                     )
-        logger.critical("Processing video stream : " + camera_name)
+        logger.info("Processing video stream : " + camera_name)
         self.process_results(results, camera_name)
 
     def extract_features(self, vector_collection: dict) -> dict:
@@ -245,8 +245,16 @@ class Solution:
         model = model.to(device)
 
         for i, (ky, val) in enumerate(vector_collection.items(), 1):
-            image_data = val["image"]
+            image_data = val.get("image")
+            bounding_box = val.get("bounding_box")
+            if (image_data is None) or (bounding_box is None):
+                logger.error(f"Error: Image or bounding box not found for {ky}")
+                continue
+
+            bounding_box = [int(i) for i in bounding_box]
+
             image_data = self._prepare_image(image_data)
+            image_data = image_data.crop(bounding_box)
             input_tensor = self.transform(image_data).unsqueeze(0).to(device)
 
             with torch.no_grad():
@@ -276,8 +284,14 @@ class Solution:
         Returns:
             numpy.ndarray: The retrieved frame as an image.
         """
-        cap = cv2.VideoCapture(camera_name)
 
+        try:
+            if not Path(camera_name).exists():
+                raise FileNotFoundError(f"Video file not found: {camera_name}")
+        except FileNotFoundError as e:
+            logger.error(f"Error: Video file not found: {camera_name}")
+
+        cap = cv2.VideoCapture(camera_name)
         cap.set(cv2.CAP_PROP_POS_FRAMES, frame_id)
         ret, frame = cap.read()
         cap.release()
@@ -356,14 +370,14 @@ class Solution:
         """
         overall_start_time = time.time()
         logger.info("Starting aggregated process")
-        logger.info("Supplied cameras: "+ str(videos))
 
         for i in videos:
-            self.camera_names.append(i)  # os.path.basename(i).replace(".mp4", "")
+            self.camera_names.append(i)
 
         for i, video_path in enumerate(videos, 1):
+            self.experiment.log_video(str(video_path.absolute()))
             video_start_time = time.time()
-            self.camera_name = os.path.basename(video_path).replace(".mp4", "")
+            self.camera_name = video_path.name.removesuffix(video_path.suffix)
             # Process the video
             vector_collection = self.process_video(video_path)
 
@@ -402,7 +416,7 @@ class Solution:
 
             # Save results to HDF5
             save_results_start_time = time.time()
-            base_name = os.path.splitext(os.path.basename(video_path))[0]
+            base_name = video_path.name.removesuffix(video_path.suffix)
             self.save_results(f"processed_results_{base_name}.hd5", vector_collection)
             save_results_time = time.time() - save_results_start_time
             logger.telemetry(
@@ -430,17 +444,13 @@ class Solution:
                 val.append([0] * len(videos))
 
         for i in range(len(self.camera_names)):
-            logger.critical("Working on cameras")
+            logger.info("Working on camera: ")
             self.check_video_stream(self.data_array[i], self.camera_names[i])
 
+        logger.info("Working on matrices")
         for ky, val in self.data.items():
-            for i in range(len(val)):
-                self.data[ky][i][i] = 0
-
-        logger.critical("Working on matrices")
-        for ky, val in self.data.items():
-            os.makedirs(f"{self.team_name}/Matrices", exist_ok=True)
-            with open(f"{self.team_name}/Matrices/{ky}.json", "w") as f:
+            os.makedirs(f"data/{self.team_name}/Matrices", exist_ok=True)
+            with open(f"data/{self.team_name}/Matrices/{ky}.json", "w") as f:
                 json.dump(val, f)
 
         overall_process_time = time.time() - overall_start_time
@@ -448,7 +458,6 @@ class Solution:
 
         self.experiment.log_metric("total_processing_time", overall_process_time)
         self.experiment.log_asset("application.log")
-        self.experiment.log_asset("processed_results_*.hd5")
 
     def process_input_json(self, json_name: str) -> list[str]:
         """
@@ -462,114 +471,7 @@ class Solution:
         """
         with open(json_name, "r") as f:
             data = json.load(f)
-        return [i for i in data.values()]
-
-    def process_results(self, results: List[VehicleMatch], source_camera: str) -> None:
-        """
-        Process the vehicle matching results and log the matches.
-
-        Args:
-            results (List[VehicleMatch]): List of vehicle matching results.
-            source_camera (str): The name of the camera where the source video was recorded.
-        """
-        source_camera = os.path.basename(source_camera).removesuffix(".mp4")
-
-        names = [os.path.basename(i).replace(".mp4", "") for i in self.camera_names]
-        src_idx = names.index(source_camera)
-        colors = [(255, 0, 0), (0, 0, 255)]
-
-        for i in results:
-            frames = self.get_frame_from_video(i["frame_id"], i["camera_name"])
-            bounding_box = [
-                int(float(k))
-                for k in i.get("bounding_box", "")
-                .split("[")[1]
-                .split("]")[0]
-                .split(",")
-            ]
-            if bounding_box:
-                x1, y1, x2, y2 = map(int, bounding_box)
-                cv2.rectangle(
-                    frames, (x1, y1), (x2, y2), color=(0, 255, 0), thickness=8
-                )
-
-                vehicle_name = self.process_vehicle_name_string(
-                    self.team_name, i.get("vehicle", "unknown")
-                )
-                text = vehicle_name.split("/")[-1] + "_" + i.get("similar_vehicle_id")
-                font_scale = 0.75
-                font_thickness = 1
-                font = cv2.FONT_HERSHEY_SIMPLEX
-
-                text_size, _ = cv2.getTextSize(text, font, font_scale, font_thickness)
-                text_width, text_height = text_size
-                text_position = (x1 + 10, y1 + 30)
-                background_position = (
-                    text_position[0],
-                    text_position[1] - text_height,
-                    text_position[0] + text_width,
-                    text_position[1],
-                )
-                cv2.rectangle(
-                    frames,
-                    (background_position[0], background_position[1]),
-                    (background_position[2], background_position[3]),
-                    (255, 255, 255),
-                    cv2.FILLED,
-                )
-                color = colors[results.index(i) % len(colors)]
-                cv2.putText(
-                    frames,
-                    text,
-                    text_position,
-                    font,
-                    font_scale,
-                    color,
-                    font_thickness,
-                    lineType=cv2.LINE_AA,
-                )
-                output_filename = f"{vehicle_name}_{i.get('camera_name').split('/')[-1].replace('.mp4', '')}_{i.get('vehicle_id')}.jpg"
-
-                cv2.imwrite(output_filename, frames)
-            self.data[i["vehicle"]][src_idx][
-                names.index(i.get("camera_name").split("/")[-1].replace(".mp4", ""))
-            ] += 1
-
-    def process_vehicle_name_string(self, team_name: str, vehicle_name: str) -> str:
-        """
-        Process the vehicle name string and ensure directory structure is created.
-
-        This method takes the vehicle name string (e.g., "Car-123") and splits it to get
-        the vehicle type (e.g., "Car") and a unique identifier (e.g., "123"). It then ensures
-        that a directory exists for the vehicle type and returns a formatted string with the
-        directory structure included.
-
-        Args:
-            team_name (str): The name of the team, used to create the directory structure.
-            vehicle_name (str): The vehicle name string containing the type and identifier.
-
-        Returns:
-            str: A formatted string with the directory structure, e.g., "Car/Car-123".
-        """
-        names = vehicle_name.split("#")
-        vehicle_type = names[0].strip()
-
-        directory_mapping = {
-            "Car": "Car",
-            "Bus": "Bus",
-            "LCV": "LCV",
-            "Truck": "Truck",
-            "Three-Wheeler": "Three-Wheeler",
-            "Two-Wheeler": "Two-Wheeler",
-            "Bicycle": "Bicycle",
-        }
-
-        if vehicle_type in directory_mapping:
-            directory_path = directory_mapping[vehicle_type]
-            os.makedirs(f"{team_name}/Images/{directory_path}", exist_ok=True)
-            return f"{team_name}/Images/{directory_path}/{vehicle_name}"
-
-        return vehicle_name
+        return [Path(i) for i in data.values()]
 
     def process_video(self, video: str) -> dict:
         """
@@ -583,7 +485,7 @@ class Solution:
         """
         current_time = time.time()
         cap = cv2.VideoCapture(video)
-        try :
+        try:
             assert cap.isOpened(), "Error reading video file"
         except AssertionError as e:
             logger.error(e)
@@ -633,7 +535,7 @@ class Solution:
             frame_count += 1
 
             if frame_count % 100 == 0:
-                logger.info(f"Processed {frame_count}/{self.max_frames} frames")
+                logger.info(f"Processed {frame_count}/{total_frames} frames")
 
         logger.info(
             "Video processing completed in %.2f seconds.", time.time() - current_time
@@ -643,69 +545,6 @@ class Solution:
         self.experiment.log_metric("video_processing_time", time.time() - current_time)
 
         return counter.get_vector_collection()
-
-    def save_photos(self, collection) -> None:
-        """
-        Save images from the vector collection to disk, including drawing bounding boxes and text.
-
-        Args:
-            collection (dict): The vector collection containing the images and metadata.
-        """
-        curr_time = time.time()
-        colors = [(255, 0, 0), (0, 0, 255)]
-
-        for i, (key, val) in enumerate(collection.items(), 1):
-            image_data = val["image"]
-            bounding_box = val.get("bounding_box")
-            if bounding_box:
-                x1, y1, x2, y2 = map(int, bounding_box)
-                cv2.rectangle(
-                    image_data, (x1, y1), (x2, y2), color=(0, 255, 0), thickness=8
-                )
-
-                vehicle_name = self.process_vehicle_name_string(
-                    self.team_name, val.get("vehicle", "unknown")
-                )
-                text = vehicle_name.split("/")[-1]
-                font_scale = 0.75
-                font_thickness = 1
-                font = cv2.FONT_HERSHEY_SIMPLEX
-
-                text_size, _ = cv2.getTextSize(text, font, font_scale, font_thickness)
-                text_width, text_height = text_size
-                text_position = (x1 + 10, y1 + 30)
-                background_position = (
-                    text_position[0],
-                    text_position[1] - text_height,
-                    text_position[0] + text_width,
-                    text_position[1],
-                )
-                cv2.rectangle(
-                    image_data,
-                    (background_position[0], background_position[1]),
-                    (background_position[2], background_position[3]),
-                    (255, 255, 255),
-                    cv2.FILLED,
-                )
-                color = colors[i % len(colors)]
-                cv2.putText(
-                    image_data,
-                    text,
-                    text_position,
-                    font,
-                    font_scale,
-                    color,
-                    font_thickness,
-                    lineType=cv2.LINE_AA,
-                )
-
-            output_filename = f"{vehicle_name}_{key}.jpg"
-            cv2.imwrite(output_filename, image_data)
-
-            if i % 100 == 0:
-                logger.info(f"Saved {i} photos with bounding boxes and text")
-
-        logger.telemetry(f"Photos saved in {time.time() - curr_time:.2f} seconds")
 
     def save_results(self, output_file: str, dictionary: dict) -> None:
         """
@@ -770,7 +609,7 @@ class Solution:
                 embeddings.append(data["features"].tolist())
                 metadatas.append(
                     {
-                        "camera": camera_name,
+                        "camera": str(camera_name.absolute()),
                         "vehicle": data.get("vehicle", "Unknown"),
                         "frame_id": data.get("frame_id", -1),
                         "bounding_box": str(data.get("bounding_box", [])),
@@ -815,7 +654,9 @@ class Solution:
             logger.critical("Starting Chroma...")
 
             process = subprocess.Popen(
-                ["chroma", "run", "--host", "0.0.0.0"], stdout=subprocess.PIPE, stderr=subprocess.PIPE
+                ["chroma", "run", "--host", "0.0.0.0"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
             )
 
             logger.info(
@@ -831,7 +672,7 @@ class Solution:
                     )
                     client.heartbeat()
                     logger.info("Chroma client started successfully.")
-                    return 
+                    return
                 except Exception:
                     logger.info(
                         f"Waiting for Chroma to start... ({(i + 1) * 5} seconds passed)"
@@ -844,3 +685,89 @@ class Solution:
             logger.error(f"Chroma start stderr: {stderr.decode()}")
 
             raise Exception("Failed to start Chroma.")
+
+    def process_results(self, results: List[VehicleMatch], source_camera: str) -> None:
+        """
+        Process the vehicle matching results and log the matches.
+
+        Args:
+            results (List[VehicleMatch]): List of vehicle matching results.
+            source_camera (str): The name of the camera where the source video was recorded.
+        """
+        logger.info("Processing results of " + source_camera)
+        camera_names = [Path(cam).stem for cam in self.camera_names]
+        src_idx = camera_names.index(Path(source_camera).stem)
+        colors = [(255, 0, 0), (0, 0, 255)]
+
+        for result in results:
+            frame = self.get_frame_from_video(result["frame_id"], result["camera_name"])
+            bounding_box_str = result.get("bounding_box", "")
+
+            if bounding_box_str:
+                # Parse bounding box
+                bounding_box = [
+                    int(float(k)) for k in bounding_box_str.strip("[]").split(",")
+                ]
+                x1, y1, x2, y2 = bounding_box
+
+                # Draw bounding box
+                cv2.rectangle(frame, (x1, y1), (x2, y2), color=(0, 255, 0), thickness=8)
+
+                # Prepare text
+                vehicle_name = Path(result.get("vehicle", "unknown"))
+                text = f"{vehicle_name.name}_{result.get('similar_vehicle_id')}"
+
+                # Set text properties
+                font = cv2.FONT_HERSHEY_SIMPLEX
+                font_scale = 0.75
+                font_thickness = 1
+
+                # Calculate text size and position
+                text_size, _ = cv2.getTextSize(text, font, font_scale, font_thickness)
+                text_width, text_height = text_size
+                text_position = (x1 + 10, y1 + 30)
+                background_position = (
+                    text_position[0],
+                    text_position[1] - text_height,
+                    text_position[0] + text_width,
+                    text_position[1],
+                )
+
+                # Draw text background
+                cv2.rectangle(
+                    frame,
+                    background_position[:2],
+                    background_position[2:],
+                    (255, 255, 255),
+                    cv2.FILLED,
+                )
+
+                # Draw text
+                color = colors[results.index(result) % len(colors)]
+                cv2.putText(
+                    frame,
+                    text,
+                    text_position,
+                    font,
+                    font_scale,
+                    color,
+                    font_thickness,
+                    lineType=cv2.LINE_AA,
+                )
+
+                # Save annotated frame
+                camera_name = Path(result.get("camera_name", ""))
+                output_filename = (
+                    "data"
+                    / 
+                    Path(self.team_name)
+                    / "Images"
+                    / vehicle_name.name
+                    / f"{camera_name.stem}_{vehicle_name.name}_{result.get('vehicle_id')}.jpg"
+                )
+                output_filename.parent.mkdir(parents=True, exist_ok=True)
+                cv2.imwrite(str(output_filename), frame)
+
+            # Update data matrix
+            camera_name = Path(result.get("camera_name", "")).stem
+            self.data[result["vehicle"]][src_idx][camera_names.index(camera_name)] += 1
