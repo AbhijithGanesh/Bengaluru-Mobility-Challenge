@@ -15,8 +15,8 @@ import numpy as np
 import torch
 from chromadb.api.models.Collection import Collection
 from PIL import Image
-from torchvision import transforms
-from torchreid import utils
+from torchvision import models, transforms
+from torchreid import utils, models as torchreid_models
 from ultralytics import YOLO
 
 from module import Counter
@@ -60,7 +60,6 @@ class Solution:
         threshold: float = 0.7,
         team_name: str = "ChennaiMobility",
         transform: transforms.Compose = None,
-        tensort_rt: bool = False,
     ) -> None:
         """
         Initialize the Solution class with common parameters and empty vector collections.
@@ -72,7 +71,6 @@ class Solution:
             transform (transforms.Compose): Image transformation pipeline. If None, use the default.
         """
         self.model = YOLO(model)
-        self.tensrort = tensort_rt
         self.max_frames = max_frames
         self.threshold = threshold
         self.transform = transform or self._create_image_transform()
@@ -123,13 +121,26 @@ class Solution:
         """
         return transforms.Compose(
             [
-                transforms.Resize((256, 128)),
+                transforms.Resize((224, 224)),
                 transforms.ToTensor(),
                 transforms.Normalize(
                     mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
                 ),
             ]
         )
+
+    def _load_feature_extractor_model(self) -> torch.nn.Module:
+        """
+        Load and prepare the ResNet50-IBN-A model.
+
+        Returns:
+            torch.nn.Module: The loaded ResNet50-IBN-A model.
+        """
+        model = torch.hub.load(
+            "AbhijithGanesh/IBN-Net", "resnet50_ibn_a", pretrained=True
+        )
+        model.eval()
+        return model
 
     def _prepare_features(self, collection: dict) -> np.array:
         """
@@ -178,60 +189,49 @@ class Solution:
     def check_video_stream(self, video1: dict, camera_name: str) -> None:
         """
         Check if the video stream has similar vehicle objects based on their feature vectors.
-
         Args:
-            video1 (dict): The feature vector collection for the first video.
-            camera_name (str): The name of the camera corresponding to the video.
+        video1 (dict): The feature vector collection for the first video.
+        camera_name (str): The name of the camera corresponding to the video.
         """
         results = []
         camera_base_name = Path(
             camera_name
-        ).stem  # Get base name of the camera without extension
+        ).stem  
 
-        # Loop through each feature vector from the first video
+        valid_vehicles = []
         for vehicle_id, vehicle_data in video1.items():
-            # Extract feature vector from the current vehicle
             features = vehicle_data.get("features")
             if features is None:
                 logger.warning(
                     f"No features found for vehicle {vehicle_id} in {camera_base_name}"
                 )
                 continue
-
-            # Clean up the vehicle field to remove the part after the '#'
             current_vehicle = vehicle_data.get("vehicle", "Unknown").split("#")[0]
+            valid_vehicles.append((vehicle_id, current_vehicle, features[0].tolist()))
 
-            # Query the Chroma collection with the vehicle's feature vector
-            try:
-                query_result = self.coll.query(query_embeddings=[features[0].tolist()])
-            except Exception as e:
-                logger.error(f"Error querying Chroma for vehicle {vehicle_id}: {e}")
-                continue
+        try:
+            query_embeddings = [v[2] for v in valid_vehicles]
+            query_results = self.coll.query(query_embeddings=query_embeddings)
+        except Exception as e:
+            logger.error(f"Error querying Chroma: {e}")
+            return
 
-            # Check similarity for each result returned by Chroma
-            for idx, distance in enumerate(query_result["distances"][0]):
-                # Clean up the vehicle field from Chroma results as well
-                query_vehicle = query_result["metadatas"][0][idx]["vehicle"].split("#")[
-                    0
-                ]
-
-                # Ensure that the similarity is below the threshold, it's not comparing the vehicle with itself,
-                # and that the vehicle matches the query vehicle
-                if (
-                    query_result["ids"][0][idx] != vehicle_id
-                    and query_vehicle == current_vehicle
-                ):
-                    similar_vehicle_info = {
-                        "vehicle_id": vehicle_id,
-                        "similar_vehicle_id": query_result["ids"][0][idx],
-                        "vehicle": query_vehicle,
-                        "frame_id": query_result["metadatas"][0][idx]["frame_id"],
-                        "bounding_box": query_result["metadatas"][0][idx][
-                            "bounding_box"
-                        ],
-                        "camera_name": query_result["metadatas"][0][idx]["camera"],
-                    }
-                    results.append(similar_vehicle_info)
+        for i, (vehicle_id, current_vehicle, _) in enumerate(valid_vehicles):
+            for idx, (similar_id, metadata) in enumerate(
+                zip(query_results["ids"][i], query_results["metadatas"][i])
+            ):
+                query_vehicle = metadata["vehicle"].split("#")[0]
+                if similar_id != vehicle_id and query_vehicle == current_vehicle:
+                    results.append(
+                        {
+                            "vehicle_id": vehicle_id,
+                            "similar_vehicle_id": similar_id,
+                            "vehicle": query_vehicle,
+                            "frame_id": metadata["frame_id"],
+                            "bounding_box": metadata["bounding_box"],
+                            "camera_name": metadata["camera"],
+                        }
+                    )
 
         logger.info(
             f"Processing video stream: {camera_base_name} with {len(results)} matching results."
@@ -260,8 +260,8 @@ class Solution:
 
         transform = transforms.Compose(
             [
-                transforms.Resize((256, 128)),
-                transforms.ToTensor(),
+                transforms.Resize((256, 128)),  # Resize image to appropriate dimensions
+                transforms.ToTensor(),  # Convert image to tensor
                 transforms.Normalize(
                     mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
                 ),  # Normalize
@@ -355,6 +355,40 @@ class Solution:
             logger.error(f"An unexpected error occurred: {str(e)}")
             raise
 
+    def load_results(self, input_file: str) -> dict:
+        """
+        Load previously saved results (features and images) from an HDF5 file.
+
+        Args:
+            input_file (str): Path to the input HDF5 file.
+
+        Returns:
+            dict: The loaded vector collection.
+        """
+        try:
+            vector_collection = {}
+            with h5py.File(input_file, "r") as processed_hdf5:
+                for i, key in enumerate(processed_hdf5.keys(), 1):
+                    features_dataset = processed_hdf5[f"{key}/features"]
+                    image_dataset = processed_hdf5[f"{key}/image"]
+
+                    vector_collection[key] = {
+                        "features": features_dataset[()],
+                        "image": image_dataset[()],
+                        "vehicle": features_dataset.attrs.get("vehicle", "Unknown"),
+                        "frame_id": features_dataset.attrs.get("frame_id", -1),
+                    }
+
+                    if i % 100 == 0:
+                        logger.info(f"Loaded {i} items from HDF5")
+
+            logging.info(f"Results successfully loaded from {input_file}")
+            return vector_collection
+
+        except Exception as e:
+            logging.error(f"Error loading results from HDF5: {str(e)}")
+            return {}
+
     def process(self, videos: list[str]) -> None:
         """
         Aggregate all the processing steps: video processing, feature extraction, and similarity calculation.
@@ -364,7 +398,6 @@ class Solution:
         """
         overall_start_time = time.time()
         logger.info("Starting aggregated process")
-        logger.info(f"No of GPUs: {torch.cuda.device_count()}")
 
         for i in videos:
             self.camera_names.append(i)
@@ -432,8 +465,6 @@ class Solution:
         logger.info("Working on matrices")
         for ky, val in self.data.items():
             for i in range(len(val)):
-                if i == 0:
-                    self.data[ky] = [0] * len(val)
                 self.data[ky][i][i] = 0
 
         for ky, val in self.data.items():
@@ -534,6 +565,37 @@ class Solution:
         self.experiment.log_metric("video_processing_time", time.time() - current_time)
 
         return counter.get_vector_collection()
+
+    def save_results(self, output_file: str, dictionary: dict) -> None:
+        """
+        Save the processed results (features and images) to an HDF5 file.
+
+        Args:
+            output_file (str): Path to the output HDF5 file.
+            dictionary (dict): The dictionary containing the results to save.
+        """
+        try:
+            with h5py.File(output_file, "w") as processed_hdf5:
+                for i, (key, value) in enumerate(dictionary.items(), 1):
+                    feature_dataset = processed_hdf5.create_dataset(
+                        f"{key}/features", data=value["features"]
+                    )
+                    image_dataset = processed_hdf5.create_dataset(
+                        f"{key}/image", data=value["image"]
+                    )
+
+                    self._set_dataset_attributes(feature_dataset, key, value)
+                    self._set_dataset_attributes(image_dataset, key, value)
+
+                    if i % 100 == 0:
+                        logger.info(f"Saved {i} items to HDF5")
+
+            logger.info(f"Results successfully saved to {output_file}")
+
+            self.experiment.log_asset(output_file)
+
+        except Exception as e:
+            logging.error(f"Error saving results to HDF5: {str(e)}")
 
     def save_to_chroma(
         self,
