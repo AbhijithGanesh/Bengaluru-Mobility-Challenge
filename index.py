@@ -60,6 +60,7 @@ class Solution:
         threshold: float = 0.7,
         team_name: str = "ChennaiMobility",
         transform: transforms.Compose = None,
+        tensort_rt: bool = False,
     ) -> None:
         """
         Initialize the Solution class with common parameters and empty vector collections.
@@ -71,6 +72,7 @@ class Solution:
             transform (transforms.Compose): Image transformation pipeline. If None, use the default.
         """
         self.model = YOLO(model)
+        self.tensrort = tensort_rt
         self.max_frames = max_frames
         self.threshold = threshold
         self.transform = transform or self._create_image_transform()
