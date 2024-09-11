@@ -29,16 +29,18 @@
 \begin{abstract}
     This report presents our approach for vehicle re-identification in the
     context of the Bengaluru Mobility Challenge (BMC) - Phase II. The objective
-    is
-    to re-identify vehicles seen at one location in another part of the network
+    is to re-identify vehicles seen at one location in another part of the
+    network
+    and estimate origin-destination (O-D) flows over a specific time period.
+    Our
+    solution integrates YOLOv10 object detection, OSNet for feature extraction,
     and
-    estimate origin-destination (O-D) flows over a specific time period. Our
-    solution integrates YOLOv10 object detection, Instance-Batch Normalization
-    (IBN-Net) for feature extraction, and Chroma for efficient vector storage.
-    Using a custom dataset of Indian vehicles, our system achieved competitive
-    performance in re-identification across multiple camera feeds. This
-    document
-    details our methodology, results, and conclusions.
+    Chroma for efficient vector storage. Using a custom dataset of Indian
+    vehicles,
+    our system achieved competitive performance in re-identification across
+    multiple
+    camera feeds. This document details our methodology, results, and
+    conclusions.
 \end{abstract}
 
 \section{Introduction}
@@ -56,19 +58,6 @@ state-of-the-art detection and feature extraction techniques to enhance the
 accuracy of re-identification and prediction of O-D flows, improving the
 overall traffic management system in a dynamic city like Bengaluru.
 
-Through a detailed analysis of the given video footage, we're able to identify
-the following key points:
-\begin{itemize}
-    \item The dataset is substantial, requiring efficient modeling to be
-          incorporated into deep learning networks.
-    \item The data is unstructured and necessitates thorough cleaning and
-          pre-processing.
-    \item Due to the volume of data, it is impractical to load it entirely into
-          memory.
-    \item The data is highly dynamic, demanding real-time updates and
-          processing.
-\end{itemize}
-
 \section{Methodology}
 Our solution comprises three primary stages: detection, feature extraction, and
 matching.
@@ -78,12 +67,32 @@ We employ the YOLOv10 object detection framework \cite{wang2024yolov10} to
 identify vehicles in video streams. YOLOv10 is known for its real-time
 detection capability and balance between speed and accuracy.
 
-\subsection{Feature Extraction}
-For feature extraction, we use the Instance-Batch Normalization Network
-(IBN-Net) \cite{pan2018IBN-Net}, which combines instance and batch
-normalization to improve the model's generalization capabilities. This enables
-robust vehicle identification under varying conditions, such as different
-lighting or weather.
+\subsection{Feature Extraction and Re-Identification}
+For the vehicle re-identification (ReID) task, we utilize the
+\texttt{torchreid} library
+\cite{torchreid}, which provides state-of-the-art models and tools for deep
+learning-based ReID in PyTorch. Specifically, we employ the OSNet architecture,
+particularly the \texttt{osnet\_x0\_75} variant, for feature extraction. OSNet
+is
+designed for person and object re-identification tasks, and its omni-scale
+feature
+learning capability makes it particularly suitable for learning discriminative
+yet generalizable feature representations across various scales and conditions
+\cite{zhou2019osnet, zhou2021osnet}.
+
+OSNet's architecture enables robust ReID in complex environments with
+challenging variations, such as lighting and occlusions. The model combines
+information from both small and large receptive fields, ensuring that global
+and local features are well-represented. This is critical for vehicle ReID,
+where subtle differences between vehicles must be captured to achieve high
+matching accuracy.
+
+For feature extraction, each vehicle is passed through the OSNet model, and the
+resulting feature embeddings are stored in the Chroma vector database.
+Matching between different camera feeds is performed using cosine similarity
+between the
+extracted feature vectors. A threshold is applied to determine whether the
+vehicles in different frames belong to the same identity.
 
 \subsection{Vector Storage with Chroma}
 Chroma, a vector database optimized for high-dimensional embeddings, is used to
@@ -125,15 +134,15 @@ Our project uses the following libraries:
 
 \section{Conclusions}
 Our vehicle re-identification system demonstrated strong performance across
-various model configurations. The combination of YOLOv10 for detection, IBN-Net
+various model configurations. The combination of YOLOv10 for detection, OSNet
 for feature extraction, and Chroma for vector storage allowed for accurate O-D
 flow estimation. Future work includes improving detection in challenging
 environments and optimizing the matching process for larger datasets. The
-authors of this paper believe that this model is very foundational and needs
-large-scale Indian/Localized data to improve and detect fine details in the
-images. At the present stage, the model is able to detect all the commercial
-classes of vehicles decently enough but needs more data in terms of
-three-wheelers, bicycles and other non-commercial vehicles.
+authors of this paper believe that this model is foundational but requires
+large-scale, localized data to capture finer details in the images. Currently,
+the model performs well for commercial vehicles but needs improvement for
+identifying three-wheelers, bicycles, and other non-commercial vehicles.
+
 \bibliographystyle{ieeetr}
 \begin{thebibliography}{9}
     \bibitem{aicity} AI City Challenge, \url{https://www.aicitychallenge.org/}
@@ -142,14 +151,16 @@ three-wheelers, bicycles and other non-commercial vehicles.
     Available at: \url{https://arxiv.org/pdf/2105.14897}
     \bibitem{wang2024yolov10} A. Wang et al., ``YOLOv10: Real-Time End-to-End
     Object Detection,'' \emph{arXiv preprint}, 2024.
-    \bibitem{pan2018IBN-Net} X. Pan, P. Luo, J. Shi, and X. Tang, ``Two at
-    Once: Enhancing Learning and Generalization Capacities via IBN-Net,'' in
-    Proceedings of the European Conference on Computer Vision (ECCV), 2018.
-    \bibitem{wojke2017simple} N. Wojke, A. Bewley, and D. Paulus, ``Simple
-    Online and Realtime Tracking with a Deep Association Metric,'' \emph{2017
-        IEEE
-        International Conference on Image Processing (ICIP)}, pp. 3645-3649,
-    2017.
+    \bibitem{torchreid} K. Zhou and T. Xiang, ``Torchreid: A Library for Deep
+    Learning Person Re-Identification in Pytorch,'' \emph{arXiv preprint
+        arXiv:1910.10093}, 2019.
+    \bibitem{zhou2019osnet} K. Zhou, Y. Yang, A. Cavallaro, and T. Xiang,
+    ``Omni-Scale Feature Learning for Person Re-Identification,'' in Proceedings of
+    the IEEE/CVF International Conference on Computer Vision (ICCV), 2019.
+    \bibitem{zhou2021osnet} K. Zhou, Y. Yang, A. Cavallaro, and T. Xiang,
+    ``Learning Generalisable Omni-Scale Representations for Person
+    Re-Identification,'' \emph{IEEE Transactions on Pattern Analysis and Machine
+        Intelligence (TPAMI)}, 2021.
     \bibitem{naphade2020ai} M. Naphade et al., ``The 5th AI City Challenge,''
     \emph{2020 IEEE/CVF Conference on Computer Vision and Pattern Recognition
         Workshops (CVPRW)}, 2020.
@@ -223,57 +234,5 @@ tested.
         \bottomrule
     \end{tabular}
 \end{table}
-
-\subsection{Image Metrics}
-Below are the images representing various metrics for our model training and
-evaluation.
-
-\begin{figure}[ht!]
-    \centering
-    \includegraphics[width=0.45\textwidth]{loss VS step.jpeg}
-    \caption{Loss vs Step}
-\end{figure}
-
-\begin{figure}[ht!]
-    \centering
-    \includegraphics[width=0.45\textwidth]{metrics_mAP50-95(B) VS step.jpeg}
-    \caption{mAP50-95(B) vs Step}
-\end{figure}
-
-\begin{figure}[ht!]
-    \centering
-    \includegraphics[width=0.45\textwidth]{metrics_mAP50(B) VS step.jpeg}
-    \caption{mAP50(B) vs Step}
-\end{figure}
-
-\begin{figure}[ht!]
-    \centering
-    \includegraphics[width=0.45\textwidth]{metrics_precision(B) VS step.jpeg}
-    \caption{Precision(B) vs Step}
-\end{figure}
-
-\begin{figure}[ht!]
-    \centering
-    \includegraphics[width=0.45\textwidth]{metrics_recall(B) VS step.jpeg}
-    \caption{Recall(B) vs Step}
-\end{figure}
-
-\begin{figure}[ht!]
-    \centering
-    \includegraphics[width=0.45\textwidth]{val_box_loss VS step.jpeg}
-    \caption{Validation Box Loss vs Step}
-\end{figure}
-
-\begin{figure}[ht!]
-    \centering
-    \includegraphics[width=0.45\textwidth]{val_cls_loss VS step.jpeg}
-    \caption{Validation Classification Loss vs Step}
-\end{figure}
-
-\begin{figure}[ht!]
-    \centering
-    \includegraphics[width=0.45\textwidth]{model_GFLOPs.jpeg}
-    \caption{Model GFLOPs}
-\end{figure}
 
 \end{document}
