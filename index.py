@@ -15,7 +15,8 @@ import numpy as np
 import torch
 from chromadb.api.models.Collection import Collection
 from PIL import Image
-from torchvision import models, transforms
+from torchvision import transforms
+from torchreid import utils
 from ultralytics import YOLO
 
 from module import Counter
@@ -56,8 +57,8 @@ class Solution:
         self,
         model: str,
         max_frames: int = -1,
-        threshold: float = 0.89,
-        team_name: str = "APP",
+        threshold: float = 0.7,
+        team_name: str = "ChennaiMobility",
         transform: transforms.Compose = None,
     ) -> None:
         """
@@ -120,26 +121,13 @@ class Solution:
         """
         return transforms.Compose(
             [
-                transforms.Resize((224, 224)),
+                transforms.Resize((256, 128)),
                 transforms.ToTensor(),
                 transforms.Normalize(
                     mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
                 ),
             ]
         )
-
-    def _load_feature_extractor_model(self) -> torch.nn.Module:
-        """
-        Load and prepare the ResNet50-IBN-A model.
-
-        Returns:
-            torch.nn.Module: The loaded ResNet50-IBN-A model.
-        """
-        model = torch.hub.load(
-            "AbhijithGanesh/IBN-Net", "resnet50_ibn_a", pretrained=True
-        )
-        model.eval()
-        return model
 
     def _prepare_features(self, collection: dict) -> np.array:
         """
@@ -185,53 +173,73 @@ class Solution:
         dataset.attrs["vehicle"] = value.get("vehicle", "Unknown")
         dataset.attrs["frame_id"] = value.get("frame_id", -1)
 
-    def _calculate_similarities(
-        self, video: np.array, reference_flattened: np.array
-    ) -> None:
-        """
-        Calculate and log similarities between video objects.
-
-        Args:
-            video (np.array): Feature vectors of the video.
-            reference_flattened (np.array): Feature vectors of the reference.
-        """
-        ...
-
     def check_video_stream(self, video1: dict, camera_name: str) -> None:
         """
-        Check if two video streams are similar based on their feature vectors.
+        Check if the video stream has similar vehicle objects based on their feature vectors.
 
         Args:
             video1 (dict): The feature vector collection for the first video.
             camera_name (str): The name of the camera corresponding to the video.
         """
         results = []
-        camera_name = camera_name.name.removesuffix(camera_name.suffix)
-        for key, val in video1.items():
-            data = val.get("features")
-            # Find cosine similarity from Chroma
-            res = self.coll.query(query_embeddings=[data.tolist()])
-            for i in range(len(res["distances"])):
+        camera_base_name = Path(
+            camera_name
+        ).stem  # Get base name of the camera without extension
+
+        # Loop through each feature vector from the first video
+        for vehicle_id, vehicle_data in video1.items():
+            # Extract feature vector from the current vehicle
+            features = vehicle_data.get("features")
+            if features is None:
+                logger.warning(
+                    f"No features found for vehicle {vehicle_id} in {camera_base_name}"
+                )
+                continue
+
+            # Clean up the vehicle field to remove the part after the '#'
+            current_vehicle = vehicle_data.get("vehicle", "Unknown").split("#")[0]
+
+            # Query the Chroma collection with the vehicle's feature vector
+            try:
+                query_result = self.coll.query(query_embeddings=[features[0].tolist()])
+            except Exception as e:
+                logger.error(f"Error querying Chroma for vehicle {vehicle_id}: {e}")
+                continue
+
+            # Check similarity for each result returned by Chroma
+            for idx, distance in enumerate(query_result["distances"][0]):
+                # Clean up the vehicle field from Chroma results as well
+                query_vehicle = query_result["metadatas"][0][idx]["vehicle"].split("#")[
+                    0
+                ]
+
+                # Ensure that the similarity is below the threshold, it's not comparing the vehicle with itself,
+                # and that the vehicle matches the query vehicle
                 if (
-                    res["distances"][0][i] < (1 - self.threshold)
-                    and res["ids"][i] != key
+                    query_result["ids"][0][idx] != vehicle_id
+                    and query_vehicle == current_vehicle
                 ):
-                    results.append(
-                        {
-                            "vehicle_id": key,
-                            "similar_vehicle_id": res["ids"][i][0],
-                            "vehicle": res["metadatas"][0][i]["vehicle"].split("#")[0],
-                            "frame_id": res["metadatas"][0][i]["frame_id"],
-                            "bounding_box": res["metadatas"][0][i]["bounding_box"],
-                            "camera_name": res["metadatas"][0][i]["camera"],
-                        }
-                    )
-        logger.info("Processing video stream : " + camera_name)
-        self.process_results(results, camera_name)
+                    similar_vehicle_info = {
+                        "vehicle_id": vehicle_id,
+                        "similar_vehicle_id": query_result["ids"][0][idx],
+                        "vehicle": query_vehicle,
+                        "frame_id": query_result["metadatas"][0][idx]["frame_id"],
+                        "bounding_box": query_result["metadatas"][0][idx][
+                            "bounding_box"
+                        ],
+                        "camera_name": query_result["metadatas"][0][idx]["camera"],
+                    }
+                    results.append(similar_vehicle_info)
+
+        logger.info(
+            f"Processing video stream: {camera_base_name} with {len(results)} matching results."
+        )
+        self.experiment.log_metric(f"{camera_base_name}_matching_results", len(results))
+        self.process_results(results, camera_base_name)
 
     def extract_features(self, vector_collection: dict) -> dict:
         """
-        Extract features from the processed images using a ResNet50-IBN-A model.
+        Extract features from the processed images using the HACNN model.
 
         Args:
             vector_collection (dict): A dictionary containing vector collections (features and metadata) extracted from the video.
@@ -240,9 +248,23 @@ class Solution:
             dict: The updated vector collection with extracted features.
         """
         curr_time = time.time()
-        model = self._load_feature_extractor_model()
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        model = model.to(device)
+
+        feature_extractor = utils.FeatureExtractor(
+            model_name="osnet_x0_75",
+            device="cuda" if torch.cuda.is_available() else "cpu",
+            verbose=False,
+        )
+
+        transform = transforms.Compose(
+            [
+                transforms.Resize((256, 128)),
+                transforms.ToTensor(),
+                transforms.Normalize(
+                    mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
+                ),  # Normalize
+            ]
+        )
 
         for i, (ky, val) in enumerate(vector_collection.items(), 1):
             image_data = val.get("image")
@@ -251,15 +273,19 @@ class Solution:
                 logger.error(f"Error: Image or bounding box not found for {ky}")
                 continue
 
+            # Convert bounding box to integer and crop the image
             bounding_box = [int(i) for i in bounding_box]
+            image_data = self._prepare_image(image_data).crop(bounding_box)
 
-            image_data = self._prepare_image(image_data)
-            image_data = image_data.crop(bounding_box)
             input_tensor = self.transform(image_data).unsqueeze(0).to(device)
+            image_data = transform(image_data)
 
-            with torch.no_grad():
-                extracted_features = model(input_tensor).cpu().numpy().flatten()
+            # Add batch dimension to the image
+            input_tensor = image_data.unsqueeze(0).to(
+                device
+            )  # Add batch dimension [1, channels, height, width]
 
+            extracted_features = feature_extractor(input_tensor)
             vector_collection[ky]["features"] = extracted_features
 
             if i % 100 == 0:
@@ -327,40 +353,6 @@ class Solution:
             logger.error(f"An unexpected error occurred: {str(e)}")
             raise
 
-    def load_results(self, input_file: str) -> dict:
-        """
-        Load previously saved results (features and images) from an HDF5 file.
-
-        Args:
-            input_file (str): Path to the input HDF5 file.
-
-        Returns:
-            dict: The loaded vector collection.
-        """
-        try:
-            vector_collection = {}
-            with h5py.File(input_file, "r") as processed_hdf5:
-                for i, key in enumerate(processed_hdf5.keys(), 1):
-                    features_dataset = processed_hdf5[f"{key}/features"]
-                    image_dataset = processed_hdf5[f"{key}/image"]
-
-                    vector_collection[key] = {
-                        "features": features_dataset[()],
-                        "image": image_dataset[()],
-                        "vehicle": features_dataset.attrs.get("vehicle", "Unknown"),
-                        "frame_id": features_dataset.attrs.get("frame_id", -1),
-                    }
-
-                    if i % 100 == 0:
-                        logger.info(f"Loaded {i} items from HDF5")
-
-            logging.info(f"Results successfully loaded from {input_file}")
-            return vector_collection
-
-        except Exception as e:
-            logging.error(f"Error loading results from HDF5: {str(e)}")
-            return {}
-
     def process(self, videos: list[str]) -> None:
         """
         Aggregate all the processing steps: video processing, feature extraction, and similarity calculation.
@@ -370,12 +362,12 @@ class Solution:
         """
         overall_start_time = time.time()
         logger.info("Starting aggregated process")
+        logger.info(f"No of GPUs: {torch.cuda.device_count()}")
 
         for i in videos:
             self.camera_names.append(i)
 
         for i, video_path in enumerate(videos, 1):
-            self.experiment.log_video(str(video_path.absolute()))
             video_start_time = time.time()
             self.camera_name = video_path.name.removesuffix(video_path.suffix)
             # Process the video
@@ -414,18 +406,6 @@ class Solution:
                 f"{self.camera_name}_save_chroma_time", save_chroma_time
             )
 
-            # Save results to HDF5
-            save_results_start_time = time.time()
-            base_name = video_path.name.removesuffix(video_path.suffix)
-            self.save_results(f"processed_results_{base_name}.hd5", vector_collection)
-            save_results_time = time.time() - save_results_start_time
-            logger.telemetry(
-                f"Saved results for {self.camera_name} in {save_results_time:.2f} seconds"
-            )
-            self.experiment.log_metric(
-                f"{self.camera_name}_save_results_time", save_results_time
-            )
-
             logger.info(f"Completed processing {i}/{len(videos)} videos")
 
         self.data = {
@@ -449,10 +429,17 @@ class Solution:
 
         logger.info("Working on matrices")
         for ky, val in self.data.items():
+            for i in range(len(val)):
+                if i == 0:
+                    self.data[ky] = [0] * len(val)
+                self.data[ky][i][i] = 0
+
+        for ky, val in self.data.items():
             os.makedirs(f"data/{self.team_name}/Matrices", exist_ok=True)
             with open(f"data/{self.team_name}/Matrices/{ky}.json", "w") as f:
                 json.dump(val, f)
 
+        self.experiment.log_asset_folder(f"data/{self.team_name}/Matrices")
         overall_process_time = time.time() - overall_start_time
         logger.telemetry(f"Overall processing time: {overall_process_time:.2f} seconds")
 
@@ -546,37 +533,6 @@ class Solution:
 
         return counter.get_vector_collection()
 
-    def save_results(self, output_file: str, dictionary: dict) -> None:
-        """
-        Save the processed results (features and images) to an HDF5 file.
-
-        Args:
-            output_file (str): Path to the output HDF5 file.
-            dictionary (dict): The dictionary containing the results to save.
-        """
-        try:
-            with h5py.File(output_file, "w") as processed_hdf5:
-                for i, (key, value) in enumerate(dictionary.items(), 1):
-                    feature_dataset = processed_hdf5.create_dataset(
-                        f"{key}/features", data=value["features"]
-                    )
-                    image_dataset = processed_hdf5.create_dataset(
-                        f"{key}/image", data=value["image"]
-                    )
-
-                    self._set_dataset_attributes(feature_dataset, key, value)
-                    self._set_dataset_attributes(image_dataset, key, value)
-
-                    if i % 100 == 0:
-                        logger.info(f"Saved {i} items to HDF5")
-
-            logger.info(f"Results successfully saved to {output_file}")
-
-            self.experiment.log_asset(output_file)
-
-        except Exception as e:
-            logging.error(f"Error saving results to HDF5: {str(e)}")
-
     def save_to_chroma(
         self,
         vector_collection: dict,
@@ -606,7 +562,8 @@ class Solution:
 
             for i, (vehicle_id, data) in enumerate(vector_collection.items(), 1):
                 ids.append(vehicle_id)
-                embeddings.append(data["features"].tolist())
+                features = data["features"][0]
+                embeddings.append(features.tolist())
                 metadatas.append(
                     {
                         "camera": str(camera_name.absolute()),
@@ -759,8 +716,7 @@ class Solution:
                 camera_name = Path(result.get("camera_name", ""))
                 output_filename = (
                     "data"
-                    / 
-                    Path(self.team_name)
+                    / Path(self.team_name)
                     / "Images"
                     / vehicle_name.name
                     / f"{camera_name.stem}_{vehicle_name.name}_{result.get('vehicle_id')}.jpg"
