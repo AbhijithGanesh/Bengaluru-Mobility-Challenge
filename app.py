@@ -6,7 +6,8 @@ from pathlib import Path
 
 import cv2
 from index import Solution
-from PrenAbhi import global_logger as logger
+from module import global_logger as logger
+import torch
 
 cv2.setLogLevel(0)
 warnings.filterwarnings("ignore")
@@ -32,10 +33,10 @@ def validate_input_file(input_file: Path) -> bool:
 
 def create_directories_submission(team_name: str, classes: list[str]):
 
-    os.makedirs(team_name, exist_ok=True)
-    os.makedirs(f"{team_name}/Matrices", exist_ok=True)
+    os.makedirs(f"data/{team_name}", exist_ok=True)
+    os.makedirs(f"data/{team_name}/Matrices", exist_ok=True)
     for class_name in classes:
-        os.makedirs(f"{team_name}/Images/{class_name}", exist_ok=True)
+        os.makedirs(f"data/{team_name}/Images/{class_name}", exist_ok=True)
 
 
 def main():
@@ -53,9 +54,11 @@ def main():
 
     if not validate_input_file(input_file):
         logger.error("Invalid input file.")
-
         return
-    soln = Solution(model="models/prenabhi-aug-30.pt")
+
+    soln  = Solution(model="models/prenabhi-noaug-30.engine")
+    if not torch.cuda.is_available():
+        soln = Solution(model="models/prenabhi-noaug-30.pt")
     cameras = soln.process_input_json(input_file)
     logging.info("Processing video...")
     soln.process(cameras)
