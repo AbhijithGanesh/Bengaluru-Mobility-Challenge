@@ -7,7 +7,6 @@ from pathlib import Path
 import cv2
 from index import Solution
 from module import global_logger as logger
-import torch
 
 cv2.setLogLevel(0)
 warnings.filterwarnings("ignore")
@@ -55,10 +54,7 @@ def main():
     if not validate_input_file(input_file):
         logger.error("Invalid input file.")
         return
-
-    soln  = Solution(model="models/prenabhi-noaug-30.engine")
-    if not torch.cuda.is_available():
-        soln = Solution(model="models/prenabhi-noaug-30.pt")
+    soln = Solution(model="models/prenabhi-noaug-30.pt")
     cameras = soln.process_input_json(input_file)
     logging.info("Processing video...")
     soln.process(cameras)
