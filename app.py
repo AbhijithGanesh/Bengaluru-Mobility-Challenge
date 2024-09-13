@@ -48,7 +48,6 @@ def main():
         logger.fatal("Input file not provided.")
         return
 
-    team_name = "ChennaiMobility"
     classes = ["Bus", "Bicycle", "Car", "LCV", "Truck", "Two-Wheeler", "Three-Wheeler"]
     create_directories_submission(team_name, classes)
 
