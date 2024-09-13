@@ -19,8 +19,8 @@ from torchvision import models, transforms
 from torchreid import utils, models as torchreid_models
 from ultralytics import YOLO
 
-from module import Counter
-from module import global_logger as logger
+from PrenAbhi import Counter
+from PrenAbhi import global_logger as logger
 
 
 class VehicleMatch(TypedDict):
@@ -516,8 +516,7 @@ class Solution:
 
         self.experiment.log_metric("total_frames", total_frames)
 
-        if self.max_frames == -1:
-            self.max_frames = total_frames
+        self.max_frames = total_frames
 
         w, h, _fps = (
             int(cap.get(x))
@@ -540,7 +539,7 @@ class Solution:
         )
 
         frame_count = 0
-        while cap.isOpened() and frame_count < self.max_frames:
+        while cap.isOpened():
             success, im0 = cap.read()
             if not success:
                 logger.error(
